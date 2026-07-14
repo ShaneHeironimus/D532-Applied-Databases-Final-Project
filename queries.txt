@@ -1,0 +1,71 @@
+ SELECT species_id,
+       species_name
+FROM   species
+
+SELECT breed_id,
+       breed_name,
+       species_id
+FROM   breeds
+
+SELECT color_id,
+       color_name
+FROM   colors
+
+SELECT sex_id,
+       sex_name
+FROM   sexes
+
+SELECT species_id,
+       species_name
+FROM   species
+ORDER  BY species_name
+
+SELECT color_id,
+       color_name
+FROM   colors
+ORDER  BY color_name
+
+SELECT sex_id,
+       sex_name
+FROM   sexes
+ORDER  BY sex_name
+
+SELECT Max(a.unique_id) AS unique_id,
+       a.animal_id      AS [Shelter ID],
+       a.animal_name    AS [Name],
+       a.intake_date    AS [Intake Date],
+       a.animal_age     AS [Age],
+       s.species_name   AS [Species],
+       c.color_name     AS [Color],
+       sx.sex_name      AS [Sex]
+FROM   animals a
+       LEFT JOIN species AS s
+              ON a.species_id = s.species_id
+       LEFT JOIN colors AS c
+              ON a.color_id = c.color_id
+       LEFT JOIN sexes AS sx
+              ON a.sex_id = sx.sex_id
+WHERE  a.movementtype IS NULL
+       AND a.puttosleep = 0
+       AND a.deceaseddate IS NULL
+GROUP  BY a.animal_name
+ORDER  BY a.animal_name ASC
+
+INSERT INTO animals
+            (animal_id,
+             animal_name,
+             intake_date,
+             animal_age,
+             species_id,
+             color_id,
+             sex_id,
+             puttosleep)
+VALUES      (?,?,Date('now'),?,?,?,?,0)
+
+UPDATE animals
+SET    movementtype = 'Adoption'
+WHERE  unique_id = ?
+
+UPDATE animals
+SET    {db_column} = ?
+WHERE  unique_id = ?  
