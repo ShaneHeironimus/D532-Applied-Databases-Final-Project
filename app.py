@@ -1,17 +1,14 @@
 from shiny import App, render, ui, reactive
 import pandas as pd
 import sqlite3
-import os
 
-# --- 1. DATABASE DATA INITIALIZATION ---
-DB_NAME = "prod_shelter.db"
-
+# initializing the connection to the database
 def get_db_connection():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect("prod_shelter.db")
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
-# Fetch dropdown choices dynamically from lookup tables for the Intake Form
+# generating the list list of choices for each dropdown menu on the left panel menu
 conn = get_db_connection()
 species_choices = {row[0]: row[1] for row in conn.execute("SELECT species_id, species_name FROM species ORDER BY species_name").fetchall()}
 color_choices = {row[0]: row[1] for row in conn.execute("SELECT color_id, color_name FROM colors ORDER BY color_name").fetchall()}
@@ -19,11 +16,11 @@ sex_choices = {row[0]: row[1] for row in conn.execute("SELECT sex_id, sex_name F
 conn.close()
 
 
-# --- 2. USER INTERFACE ---
+# creating the user interface for the dashboard
 app_ui = ui.page_sidebar(
     ui.sidebar(
         ui.h3("Log New Intake"),
-        ui.input_text("ani_id", "Shelter Animal ID", placeholder="e.g. D2606012"),
+        ui.input_text("ani_id", "Shelter Animal ID", placeholder="e.g. 12345"),
         ui.input_text("ani_name", "Animal Name", placeholder="e.g. Buddy"),
         ui.input_select("ani_species", "Species", choices=species_choices),
         ui.input_text("ani_age", "Calculated Age", placeholder="e.g. 2 years"),
@@ -36,7 +33,7 @@ app_ui = ui.page_sidebar(
     ui.card(
         ui.card_header(
             ui.layout_columns(
-                ui.h2("Adoptable Shelter Animals Dashboard"),
+                ui.h2("Bloomington Adoptable Shelter Animals Dashboard"),
                 ui.div(
                     ui.input_action_button("btn_adopt", "Mark Selected as Adopted", class_="btn-success"),
                     style="text-align: right;"
@@ -46,22 +43,25 @@ app_ui = ui.page_sidebar(
         ),
         ui.output_data_frame("animals_grid"),
     )
+
+    # TODO - add cards for total cats and dogs
 )
 
 
-# --- 3. SERVER LOGIC ---
+# back end server logic, this is where the database actions will take place
 def server(input, output, session):
     
     # Reactive value serving as an explicit database state trigger
     db_trigger = reactive.Value(0)
     
-    # 1. READ Operation (Fixed duplication query)
     @reactive.calc
     def fetch_active_animals():
-        db_trigger.get() # Establishes dependency loop
+        db_trigger.get()
         
         conn = get_db_connection()
 
+        # this query generates the list of adoptable animals while ensuring
+        # there are no duplicate records by using MAX() on unique_id
         query = """
             SELECT 
                 MAX(a.unique_id) AS unique_id,
@@ -99,7 +99,8 @@ def server(input, output, session):
             filters=True            
         )
 
-    # 2. CREATE Operation (Process Sidebar Form Intake)
+    # allow the user to enter new animals into the records
+    # it also checks to make sure the fields are filled out before sending the data to the query
     @reactive.effect
     @reactive.event(input.btn_add)
     def add_new_animal():
@@ -111,6 +112,7 @@ def server(input, output, session):
         conn = get_db_connection()
         cursor = conn.cursor()
         
+        # this query will insert the records into the animals table based on the input of the Intake Form
         cursor.execute("""
             INSERT INTO animals (animal_id, animal_name, intake_date, animal_age, species_id, color_id, sex_id, puttosleep)
             VALUES (?, ?, DATE('now'), ?, ?, ?, ?, 0)
@@ -128,23 +130,24 @@ def server(input, output, session):
         db_trigger.set(db_trigger.get() + 1)
         ui.modal_show(ui.modal(f"Successfully logged {input.ani_name()} into database!", title="Intake Logged"))
 
-    # 3. DELETE / Outcome Operation (Mark selected row as adopted)
+    # this section allows the user to mark an animal as "adopted" and will remove the record from the dashboard and refresh it
+    # the records are not removed from the database since they are still there for historical records
     @reactive.effect
     @reactive.event(input.btn_adopt)
     def mark_as_adopted():
-        # Get selected row details from grid
+        # this logic ensures that a record is selected to be "adopted" before proceeding with the action
         selected_rows = animals_grid.cell_selection()["rows"]
         if not selected_rows:
             ui.modal_show(ui.modal("Please select an animal from the table grid first.", title="No Selection Found"))
             return
             
-        # Extract the database's true primary key (unique_id) from the selected row
+        # grabbing the animal's unique ID to then be passed to the next query to remove the record
         current_df = fetch_active_animals()
         selected_index = list(selected_rows)[0]
         db_unique_id = int(current_df.iloc[selected_index]["unique_id"])
         animal_name = current_df.iloc[selected_index]["Name"]
         
-        # Update record row state in DB to route them out of the active grid layout
+        # this updates the database by setting the movementtype to "Adoption" to mark the animal as adopted
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
@@ -155,28 +158,28 @@ def server(input, output, session):
         conn.commit()
         conn.close()
         
-        # Trigger refresh state update loop
+        # refreshes the dashboard and displays a message about the animal being adopted
         db_trigger.set(db_trigger.get() + 1)
         ui.modal_show(ui.modal(f"Congratulations! {animal_name} has been processed for adoption.", title="Animal Adopted"))
 
-    # 4. UPDATE Operation (Direct inline cell patching)
+    # this section allows the user to directly update the cells within the dashboard without needing to remove and add the record again
     @animals_grid.set_patch_fn
     def upgrade_cell_patch(*, patch: render.CellPatch):
         try:
             current_df = fetch_active_animals()
             
-            # Extract values using standard dictionary bracket syntax
+            # extracting values
             row_idx = patch["row_index"]
             col_idx = patch["column_index"]
             new_value = patch["value"]
             
-            # Map column indices to our specific dataframe headers safely
+            # mapping column indices to specific dataframe headers
             col_name = current_df.columns[col_idx]
             
-            # Grab the database primary key for that specific row row_idx
+            # grabbing the primary key
             db_unique_id = int(current_df.iloc[row_idx]["unique_id"])
             
-            # Map front-end column names back to physical database schema names
+            # mapping the columns to the database column names
             column_mapping = {
                 "Shelter ID": "animal_id",
                 "Name": "animal_name",
@@ -186,22 +189,19 @@ def server(input, output, session):
             
             db_column = column_mapping.get(col_name)
             if not db_column:
-                # If they try to edit Species/Color/Sex, reject it safely
                 return current_df.iloc[row_idx][col_name]
                 
-            # Execute the UPDATE directly to SQLite
+            # UPDATE query to make the changes to the respective selected cell
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(f"UPDATE animals SET {db_column} = ? WHERE unique_id = ?", (new_value, db_unique_id))
             conn.commit()
             conn.close()
-            
-            # Return the new value string to tell the grid it was successful!
+
             return new_value
-            
+        
         except Exception as e:
             print(f"Database Cell Patch Failed: {e}")
-            # If it errors out, return the old value to revert gracefully instead of freezing red
             return patch["value"]
 
 app = App(app_ui, server)
